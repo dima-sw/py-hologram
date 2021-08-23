@@ -1,2 +1,2 @@
 # py-hologram
- Create your own hologram videos
+Make your own hologram videos
