@@ -1,114 +1,336 @@
-#:kivy 1.1.0
+#:kivy 2.1.0
+#:import Animation kivy.animation.Animation
+#:import Clock kivy.clock.Clock
+
+<ModernButton@Button>:
+    font_name: 'Roboto'
+    font_size: '16sp'
+    bold: True
+    background_normal: ''
+    background_color: (0.2, 0.6, 0.8, 1)
+    color: (1, 1, 1, 1)
+    size_hint_y: None
+    height: '50dp'
+    canvas.before:
+        Color:
+            rgba: self.background_color
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [25]
+    canvas.after:
+        Color:
+            rgba: (1, 1, 1, 0.1)
+        Line:
+            rounded_rectangle: [self.x, self.y, self.width, self.height, 25]
+            width: 2
+
+<ModernCard@BoxLayout>:
+    orientation: 'vertical'
+    size_hint: None, None
+    size: '400dp', '200dp'
+    pos_hint: {'center_x': 0.5, 'center_y': 0.5}
+    spacing: '20dp'
+    padding: ['30dp', '30dp', '30dp', '30dp']
+    canvas.before:
+        Color:
+            rgba: (0.9, 0.9, 0.9, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [20]
+        Color:
+            rgba: (0.7, 0.7, 0.7, 0.5)
+        Line:
+            rounded_rectangle: [self.x, self.y, self.width, self.height, 20]
+            width: 2
+
+<ModernProgressBar@Widget>:
+    progress: 0.0
+    canvas.before:
+        Color:
+            rgba: (0.3, 0.3, 0.3, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [10]
+        Color:
+            rgba: (0.2, 0.8, 0.4, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.width * self.progress, self.height
+            radius: [10]
 
 Root:
+    text_input: progress_label
+    canvas.before:
+        Color:
+            rgba: (0.15, 0.15, 0.2, 1)
+        Rectangle:
+            pos: self.pos
+            size: self.size
+        Color:
+            rgba: (0.25, 0.35, 0.6, 0.2)
+        Rectangle:
+            pos: self.pos
+            size: self.size
 
-    text_input: text_input
-
-
-
-    BoxLayout:
-        size_hint: 0.6, 0.7
-        pos_hint: {"center_x": 0.5, "center_y": 0.5}
-        orientation: 'vertical'
-
-        Image:
-
-            id: logo
-            source: r"C:\Users\TheDimitri\PycharmProjects\hologram\phototest\test.jpg"
-            size: 100,  100
-
+    FloatLayout:
+        # Header Section
         BoxLayout:
-            size_hint_y: None
-            height: 30
-            Button:
-
-                text: 'Select Video'
-                on_release: root.show_load()
-                size_hint : 0.5, 2
+            size_hint: 1, 0.15
+            pos_hint: {'top': 1}
+            orientation: 'horizontal'
+            padding: ['20dp', '20dp', '20dp', '20dp']
+            
+            Label:
+                text: 'HOLOGRAM STUDIO'
+                font_name: 'Roboto'
+                font_size: '28sp'
                 bold: True
-                font_size: 14
-                background_normal: ''
-                background_color: '#C6BA3C'
+                color: (1, 1, 1, 1)
+                size_hint_x: 0.7
+                
             Label:
-                id: text_input
-                size_hint : 0.1, 0.5
-                text: ''
+                text: 'v2.0'
+                font_name: 'Roboto'
+                font_size: '14sp'
+                color: (0.7, 0.7, 0.7, 1)
+                size_hint_x: 0.3
+                halign: 'right'
 
-            Button:
+        # Main Content Area
+        ScrollView:
+            size_hint: 1, 0.85
+            pos_hint: {'top': 0.85}
+            do_scroll_x: False
+            
+            BoxLayout:
+                orientation: 'vertical'
+                size_hint_y: None
+                height: '800dp'
+                spacing: '30dp'
+                padding: ['40dp', '40dp', '40dp', '40dp']
 
-                text: 'Generate Hologram Video'
-                on_release: root.show_save()
-                size_hint : 0.5, 2
-                bold: True
-                font_size: 14
-                background_normal: ''
-                background_color: '#87B05D'
+                # Logo Section
+                BoxLayout:
+                    size_hint_y: None
+                    height: '120dp'
+                    orientation: 'horizontal'
+                    
+                    Label:
+                        text: '🎬'
+                        font_size: '60sp'
+                        color: (1, 1, 1, 1)
+                        size_hint: None, None
+                        size: '80dp', '80dp'
+                        pos_hint: {'center_y': 0.5}
+                        
+                    BoxLayout:
+                        orientation: 'vertical'
+                        size_hint_x: 0.8
+                        spacing: '5dp'
+                        
+                        Label:
+                            text: 'Transform Videos into Holograms'
+                            font_name: 'Roboto'
+                            font_size: '24sp'
+                            bold: True
+                            color: (1, 1, 1, 1)
+                            size_hint_y: None
+                            height: '30dp'
+                            
+                        Label:
+                            text: 'Create stunning 4-sided holographic displays'
+                            font_name: 'Roboto'
+                            font_size: '16sp'
+                            color: (0.8, 0.8, 0.8, 1)
+                            size_hint_y: None
+                            height: '20dp'
 
-        GridLayout:
-            cols:2
-            Label:
-                id: labelLoad
-                text: 'No file selected'
-                font_size: 18
-                color: '#7AF7DE'
+                # File Selection Card
+                ModernCard:
+                    size_hint_y: None
+                    height: '180dp'
+                    
+                    Label:
+                        text: 'SELECT VIDEO FILE'
+                        font_name: 'Roboto'
+                        font_size: '18sp'
+                        bold: True
+                        color: (0.2, 0.2, 0.2, 1)
+                        size_hint_y: None
+                        height: '30dp'
+                        
+                    BoxLayout:
+                        orientation: 'horizontal'
+                        size_hint_y: None
+                        height: '50dp'
+                        spacing: '15dp'
+                        
+                        ModernButton:
+                            text: '📁 Choose Video File'
+                            size_hint_x: 0.6
+                            background_color: (0.2, 0.6, 0.8, 1)
+                            on_release: root.show_load()
+                            
+                        Label:
+                            id: file_status_label
+                            text: 'No file selected'
+                            font_name: 'Roboto'
+                            font_size: '14sp'
+                            color: (0.6, 0.6, 0.6, 1)
+                            size_hint_x: 0.4
+                            halign: 'left'
+                            valign: 'middle'
+                            text_size: self.size
 
-            Label:
-                id: text_input
-                text: 'Progress: '
-                font_size: 18
+                # Settings Card
+                ModernCard:
+                    size_hint_y: None
+                    height: '120dp'
+                    
+                    Label:
+                        text: 'PROCESSING SETTINGS'
+                        font_name: 'Roboto'
+                        font_size: '18sp'
+                        bold: True
+                        color: (0.2, 0.2, 0.2, 1)
+                        size_hint_y: None
+                        height: '30dp'
+                        
+                    BoxLayout:
+                        orientation: 'horizontal'
+                        size_hint_y: None
+                        height: '40dp'
+                        spacing: '20dp'
+                        
+                        Label:
+                            text: 'Multi-threading:'
+                            font_name: 'Roboto'
+                            font_size: '16sp'
+                            color: (0.3, 0.3, 0.3, 1)
+                            size_hint_x: 0.6
+                            halign: 'left'
+                            valign: 'middle'
+                            
+                        CheckBox:
+                            id: threading_check
+                            size_hint_x: 0.1
+                            active: True
+                            
+                        Label:
+                            text: 'Frame Width:'
+                            font_name: 'Roboto'
+                            font_size: '16sp'
+                            color: (0.3, 0.3, 0.3, 1)
+                            size_hint_x: 0.3
+                            halign: 'left'
+                            valign: 'middle'
 
+                # Generate Button
+                BoxLayout:
+                    size_hint_y: None
+                    height: '80dp'
+                    orientation: 'vertical'
+                    spacing: '15dp'
+                    
+                    ModernButton:
+                        text: '🚀 GENERATE HOLOGRAM VIDEO'
+                        size_hint: 1, None
+                        height: '60dp'
+                        background_color: (0.2, 0.8, 0.4, 1)
+                        font_size: '18sp'
+                        on_release: root.show_save()
+                        
+                    Label:
+                        text: 'This may take several minutes depending on video length'
+                        font_name: 'Roboto'
+                        font_size: '12sp'
+                        color: (0.7, 0.7, 0.7, 1)
+                        halign: 'center'
 
-            Label:
-                id: threading
-                text: 'Multi threading'
-                font_size: 18
-                color: '#7AF7DE'
-            CheckBox:
-                id: thredingCheck
+                # Progress Section
+                BoxLayout:
+                    size_hint_y: None
+                    height: '100dp'
+                    orientation: 'vertical'
+                    spacing: '10dp'
+                    
+                    Label:
+                        text: 'PROGRESS'
+                        font_name: 'Roboto'
+                        font_size: '16sp'
+                        bold: True
+                        color: (1, 1, 1, 1)
+                        size_hint_y: None
+                        height: '25dp'
+                        
+                    ModernProgressBar:
+                        id: progress_bar
+                        size_hint_y: None
+                        height: '20dp'
+                        progress: 0.0
+                                
+                    Label:
+                        id: progress_label
+                        text: 'Ready to process'
+                        font_name: 'Roboto'
+                        font_size: '14sp'
+                        color: (0.8, 0.8, 0.8, 1)
+                        size_hint_y: None
+                        height: '20dp'
+                        halign: 'center'
 
 
 <LoadDialog>:
+    canvas.before:
+        Color:
+            rgba: (0.95, 0.95, 0.95, 1)
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [15]
+    
     BoxLayout:
         size: root.size
         pos: root.pos
         orientation: "vertical"
+        padding: ['20dp', '20dp', '20dp', '20dp']
+        spacing: '15dp'
+        
+        Label:
+            text: 'Select Video File'
+            font_name: 'Roboto'
+            font_size: '20sp'
+            bold: True
+            color: (0.2, 0.2, 0.2, 1)
+            size_hint_y: None
+            height: '30dp'
+            
         FileChooserIconView:
             id: filechooser
+            canvas.before:
+                Color:
+                    rgba: (1, 1, 1, 1)
+                RoundedRectangle:
+                    pos: self.pos
+                    size: self.size
+                    radius: [10]
 
         BoxLayout:
             size_hint_y: None
-            height: 30
-            Button:
-                text: "Cancel"
+            height: '50dp'
+            spacing: '15dp'
+            
+            ModernButton:
+                text: 'Cancel'
+                size_hint_x: 0.4
+                background_color: (0.6, 0.6, 0.6, 1)
                 on_release: root.cancel()
 
-            Button:
-                text: "Select"
+            ModernButton:
+                text: 'Select File'
+                size_hint_x: 0.6
+                background_color: (0.2, 0.6, 0.8, 1)
                 on_release: root.load(filechooser.path, filechooser.selection)
-
-<SaveDialog>:
-    text_input: text_input
-    BoxLayout:
-        size: root.size
-        pos: root.pos
-        orientation: "vertical"
-        FileChooserListView:
-            id: filechooser
-            on_selection: text_input.text = self.selection and self.selection[0] or ''
-
-        TextInput:
-            id: text_input
-            size_hint_y: None
-            height: 30
-            multiline: False
-
-        BoxLayout:
-            size_hint_y: None
-            height: 30
-            Button:
-                text: "Cancel"
-                on_release: root.cancel()
-
-            Button:
-                text: "Save"
-                on_release: root.save(filechooser.path, text_input.text)
