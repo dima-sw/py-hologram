@@ -1,0 +1,20 @@
+opencv-python>=4.8
+numpy>=1.24
+Pillow>=10.0
+customtkinter>=5.2
+tkinterdnd2>=0.4
+
+# Rimozione sfondo (opzionale). Servono anche i modelli: vedi models/README.md
+onnxruntime>=1.16
+
+# Rendering di modelli 3D (opzionale)
+moderngl>=5.10
+trimesh>=4.0
+
+# Consigliato, non un pacchetto Python: ffmpeg nel PATH.
+# Senza, la conversione funziona lo stesso ma e' circa 4 volte piu' lenta.
+#   winget install Gyan.FFmpeg     (Windows)
+#   brew install ffmpeg            (macOS)
+#   apt install ffmpeg             (Debian/Ubuntu)
+
+# Solo per la vecchia interfaccia Kivy (main/test.py): kivy, numba
