@@ -1,0 +1,13 @@
+# ambienti e cache
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# modelli di segmentazione: si scaricano, pesano ~180 MB
+models/*.onnx
+
+# risultati delle conversioni
+holograms/*.mp4
+holograms/*.avi
+!holograms/.gitkeep
