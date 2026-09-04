@@ -18,6 +18,7 @@ import cv2
 from PIL import Image
 
 import engine
+import live
 import render3d
 from settings import (BACKGROUND_PRESETS, GLOW_PRESETS, QUALITY_PRESETS,
                       STRIDE_PRESETS, THEMES, Settings, SettingsDialog)
@@ -180,6 +181,8 @@ class HologramApp(ctk.CTk, DND_BASE):
                 ("Apri video o modello…	Ctrl+O", self._pick_source),
                 ("Apri cartella dei risultati", self._open_output_folder),
                 None,
+                ("Riproduci dal vivo   F5", self.start_live),
+                None,
                 ("Esci	Ctrl+Q", self._on_close),
             ]),
             ("Modifica", [
@@ -201,6 +204,7 @@ class HologramApp(ctk.CTk, DND_BASE):
         self.bind_all("<Control-o>", lambda _e: self._pick_source())
         self.bind_all("<Control-comma>", lambda _e: self.open_settings())
         self.bind_all("<Control-q>", lambda _e: self._on_close())
+        self.bind_all("<F5>", lambda _e: self.start_live())
 
     def _build_header(self):
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -413,8 +417,17 @@ class HologramApp(ctk.CTk, DND_BASE):
             text_color=TEXT, border_width=1, border_color=BORDER,
             command=self._open_output_folder,
         )
-        self.btn_secondary.grid(row=0, column=1, padx=(12, 0))
+        self.btn_secondary.grid(row=0, column=2, padx=(12, 0))
         self.btn_secondary.grid_remove()
+
+        self.btn_live = ctk.CTkButton(
+            footer, text="Dal vivo", width=120, height=48, corner_radius=14,
+            font=ctk.CTkFont("Segoe UI", 13), fg_color=CARD, hover_color=CARD_SOFT,
+            text_color=TEXT, border_width=1, border_color=BORDER,
+            command=self.start_live,
+        )
+        self.btn_live.grid(row=0, column=1, padx=(12, 0))
+        self.btn_live.grid_remove()
 
     # --------------------------------------------------------------- stati
 
@@ -426,6 +439,7 @@ class HologramApp(ctk.CTk, DND_BASE):
             self.file_row.grid_remove()
             self.progress.grid_remove()
             self.btn_secondary.grid_remove()
+            self.btn_live.grid_remove()
             self.status.configure(text=self._idle_hint(), text_color=MUTED)
             self.btn_primary.configure(
                 text="Scegli un video", state="normal",
@@ -436,6 +450,7 @@ class HologramApp(ctk.CTk, DND_BASE):
             self.file_row.grid()
             self.progress.grid_remove()
             self.btn_secondary.grid_remove()
+            self.btn_live.grid()
             self._set_options_enabled(True)
             self.btn_primary.configure(
                 text="Crea ologramma", state="normal",
@@ -448,6 +463,7 @@ class HologramApp(ctk.CTk, DND_BASE):
             self.progress.grid()
             self.progress.set(0)
             self.btn_secondary.grid_remove()
+            self.btn_live.grid_remove()
             self._set_options_enabled(False)
             self.btn_primary.configure(
                 text="Annulla", state="normal",
@@ -457,6 +473,7 @@ class HologramApp(ctk.CTk, DND_BASE):
         elif state == "done":
             self.progress.set(1)
             self.btn_secondary.grid()
+            self.btn_live.grid()
             self._set_options_enabled(True)
             self.btn_primary.configure(
                 text="Nuova conversione", state="normal",
@@ -495,6 +512,21 @@ class HologramApp(ctk.CTk, DND_BASE):
             widget.select() if self.settings.get(key) else widget.deselect()
         ctk.set_appearance_mode(THEMES[self.settings.get("theme")])
         self.menubar.refresh_theme()
+
+    def start_live(self):
+        """Manda l'ologramma a schermo, senza produrre alcun file."""
+        if not self.sources:
+            self.status.configure(
+                text="Scegli prima un video o un modello 3D", text_color=DANGER)
+            return
+        if self.ui_state == "running":
+            return
+
+        live.LiveWindow(
+            self, self.source_path, self._current_look(), self.settings,
+            on_error=lambda message: self.status.configure(
+                text=f"Riproduzione dal vivo: {message}", text_color=DANGER),
+        )
 
     def open_settings(self):
         if self.settings_window is not None and self.settings_window.winfo_exists():

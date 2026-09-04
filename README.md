@@ -8,7 +8,8 @@ A Python application for creating hologram videos from regular video files. This
 - **Modern GUI**: Menu bar, settings window with saved preferences, drag & drop,
   live preview, light and dark themes
 - **Background Removal**: motion differencing (fast, no model) or AI cut-out (U^2-Net), plus luma and chroma keying
-- **3D Models**: load a .glb/.obj and get real parallax — each face shows a different side
+- **3D Models**: load a .glb/.obj and get real parallax — each face shows a different side, with textures
+- **Live mode**: play the hologram straight to a screen, no file, for installations
 - **Hologram Look**: bloom glow and auto-fill of the pyramid face
 - **Perfect Loop**: finds the cut where the repeat is least visible, for continuous displays
 - **Batch**: drop several clips and convert them all with the same settings
@@ -277,8 +278,18 @@ straight to hologram: **four cameras 90 degrees apart**, so each pyramid face
 shows a genuinely different side of the object. Walking around the pyramid then
 shows real parallax, which repeating one video four times can never do.
 
-Defaults to one full turn in 8 seconds at 30 fps. Rendering runs at over 1000
-frames per second on a mid-range GPU, so the render is never the bottleneck.
+Duration, number of turns and camera elevation are in Impostazioni. Rendering
+runs at over 1000 frames per second on a mid-range GPU, so it is never the
+bottleneck.
+
+**Textures** are read from the material's base colour texture and mapped
+through the model's UVs; vertex colours and a plain base colour are used when
+there is no texture.
+
+**Shading uses a crease angle** of 40 degrees: normals are averaged only across
+edges softer than that. Averaging always would turn a cube into a blob;
+averaging never would leave a sphere faceted. Meshes above 400k triangles fall
+back to flat normals, where the smoothing costs more memory than it is worth.
 
 **The GPU is touched only while rendering.** `moderngl` and `trimesh` are
 imported inside the renderer, not at module load, and the OpenGL context is
@@ -286,8 +297,23 @@ created in `TurntableRenderer.__init__` and destroyed in `close()`, including on
 error. Opening the app, or converting ordinary video, never creates a graphics
 context at all.
 
-Shading is flat (per-face normals) with two camera-space lights and a rim term.
-Textures are not read yet; vertex colours and a material's base colour are.
+## Live Mode
+
+**File > Riproduci dal vivo** (F5), or the `Dal vivo` button, sends the hologram
+straight to the screen with no file in between. Meant to sit full screen on the
+display the pyramid stands on.
+
+- A 3D model is redrawn every frame, so the rotation is genuine rather than a
+  recording, and it never repeats.
+- A video is composed and looped continuously, honouring the loop cut when
+  `Loop perfetto` is on.
+
+`Esc` closes, `F` toggles full screen, `Space` pauses.
+
+The frame period is measured from the start of each frame rather than added
+after the work: scheduling the full interval afterwards stretches the period by
+however long the frame took, which measured 18-20 fps against a target of 30.
+With the compensation it holds 30.
 
 ## Technical Details
 

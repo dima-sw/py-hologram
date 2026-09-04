@@ -25,6 +25,15 @@ VIEW_ORDER = ("up", "right", "down", "left")
 DEFAULT_ELEVATION = 16.0
 DEFAULT_FOV = 32.0
 
+# Oltre questo angolo fra due facce lo spigolo e' considerato vivo e le
+# normali non vengono mediate: e' cio' che distingue un cubo spigoloso da una
+# sfera liscia senza doverlo sapere in anticipo.
+CREASE_ANGLE = 40.0
+
+# Sopra questa soglia il calcolo delle normali smussate costa piu' memoria di
+# quanta ne valga la pena, e si ripiega sulle normali per faccia.
+SMOOTH_FACE_LIMIT = 400_000
+
 
 class ModelError(Exception):
     """Il modello non e' caricabile o non contiene geometria."""
@@ -90,16 +99,19 @@ uniform mat3 u_normal;
 in vec3 in_position;
 in vec3 in_normal;
 in vec3 in_color;
+in vec2 in_uv;
 
 out vec3 v_position;
 out vec3 v_normal;
 out vec3 v_color;
+out vec2 v_uv;
 
 void main() {
     gl_Position = u_mvp * vec4(in_position, 1.0);
     v_position = (u_modelview * vec4(in_position, 1.0)).xyz;
     v_normal = u_normal * in_normal;
     v_color = in_color;
+    v_uv = in_uv;
 }
 """
 
@@ -111,10 +123,13 @@ _FRAGMENT_SHADER = """
 #version 330
 uniform float u_rim;
 uniform vec3 u_rim_color;
+uniform bool u_textured;
+uniform sampler2D u_texture;
 
 in vec3 v_position;
 in vec3 v_normal;
 in vec3 v_color;
+in vec2 v_uv;
 
 out vec4 f_color;
 
@@ -130,7 +145,8 @@ void main() {
                   + max(dot(N, fill), 0.0) * 0.30;
     float rim = pow(1.0 - max(dot(N, V), 0.0), 2.5);
 
-    vec3 color = v_color * (0.16 + diffuse) + u_rim_color * (rim * u_rim);
+    vec3 base = u_textured ? texture(u_texture, v_uv).rgb * v_color : v_color;
+    vec3 color = base * (0.16 + diffuse) + u_rim_color * (rim * u_rim);
     f_color = vec4(clamp(color, 0.0, 1.0), 1.0);
 }
 """
@@ -152,8 +168,10 @@ class TurntableRenderer:
         self.fov = float(fov)
         self._moderngl = moderngl
 
-        positions, normals, colors = self._load(trimesh, path, base_color)
+        positions, normals, colors, uvs, texture = self._load(
+            trimesh, path, base_color)
         self.triangles = len(positions) // 3
+        self.textured = texture is not None
 
         self.ctx = moderngl.create_standalone_context()
         self.ctx.enable(moderngl.DEPTH_TEST)
@@ -162,12 +180,23 @@ class TurntableRenderer:
                                         fragment_shader=_FRAGMENT_SHADER)
         self.program["u_rim"].value = float(rim)
         self.program["u_rim_color"].value = tuple(rim_color)
+        self.program["u_textured"].value = self.textured
 
-        data = np.hstack([positions, normals, colors]).astype("f4")
+        self.texture = None
+        if texture is not None:
+            self.texture = self.ctx.texture(texture[0], 3, texture[1])
+            self.texture.build_mipmaps()
+            self.texture.filter = (moderngl.LINEAR_MIPMAP_LINEAR, moderngl.LINEAR)
+            self.texture.repeat_x = self.texture.repeat_y = True
+            self.program["u_texture"].value = 0
+            self.texture.use(0)
+
+        data = np.hstack([positions, normals, colors, uvs]).astype("f4")
         self.vbo = self.ctx.buffer(data.tobytes())
         self.vao = self.ctx.vertex_array(
             self.program,
-            [(self.vbo, "3f 3f 3f", "in_position", "in_normal", "in_color")],
+            [(self.vbo, "3f 3f 3f 2f",
+              "in_position", "in_normal", "in_color", "in_uv")],
         )
 
         self._build_targets(samples)
@@ -208,17 +237,90 @@ class TurntableRenderer:
 
         corners = vertices[faces].reshape(-1, 3)
 
-        # Normali per faccia: sempre corrette, su qualunque mesh. Le normali
-        # per vertice richiederebbero di sapere quali spigoli sono vivi.
         edge1 = vertices[faces[:, 1]] - vertices[faces[:, 0]]
         edge2 = vertices[faces[:, 2]] - vertices[faces[:, 0]]
         face_normals = np.cross(edge1, edge2)
         lengths = np.linalg.norm(face_normals, axis=1, keepdims=True)
         face_normals = np.divide(face_normals, np.where(lengths == 0, 1, lengths))
-        normals = np.repeat(face_normals, 3, axis=0)
 
+        normals = self._smooth_normals(loaded, faces, face_normals)
         colors = self._colors(loaded, faces, base_color)
-        return corners, normals, colors
+        uvs, texture = self._texture(loaded, faces)
+        return corners, normals, colors, uvs, texture
+
+    @staticmethod
+    def _smooth_normals(mesh, faces, face_normals):
+        """Normali per angolo, mediate solo attraverso gli spigoli dolci.
+
+        Mediare sempre trasforma un cubo in una bolla; non mediare mai lascia
+        una sfera sfaccettata. Si media quindi soltanto fra facce che formano
+        un angolo inferiore alla soglia di piega, che e' il comportamento
+        atteso da chiunque abbia usato un programma di modellazione.
+        """
+        flat = np.repeat(face_normals, 3, axis=0)
+        if len(faces) > SMOOTH_FACE_LIMIT:
+            return flat
+
+        try:
+            incident = np.asarray(mesh.vertex_faces)
+        except Exception:
+            return flat
+        if incident.ndim != 2 or incident.size == 0:
+            return flat
+
+        corner_vertex = faces.reshape(-1)
+        neighbours = incident[corner_vertex]                 # (F*3, grado)
+        present = neighbours >= 0
+
+        neighbour_normals = face_normals[np.clip(neighbours, 0, None)]
+        own = flat[:, None, :]
+
+        alignment = (neighbour_normals * own).sum(-1)
+        blend = present & (alignment > math.cos(math.radians(CREASE_ANGLE)))
+
+        summed = (neighbour_normals * blend[..., None]).sum(axis=1)
+        lengths = np.linalg.norm(summed, axis=1, keepdims=True)
+
+        # Un angolo isolato non ha vicini validi: si tiene la normale piatta.
+        return np.where(lengths > 1e-8, summed / np.where(lengths == 0, 1, lengths), flat)
+
+    @staticmethod
+    def _texture(mesh, faces):
+        """Coordinate texture per angolo e immagine da caricare sulla GPU."""
+        empty = np.zeros((faces.size, 2), "f4")
+
+        visual = getattr(mesh, "visual", None)
+        uv = getattr(visual, "uv", None)
+        if uv is None:
+            return empty, None
+
+        uv = np.asarray(uv, "f8")
+        if uv.shape[0] != len(mesh.vertices):
+            return empty, None
+
+        material = getattr(visual, "material", None)
+        image = None
+        for attribute in ("baseColorTexture", "image"):
+            candidate = getattr(material, attribute, None)
+            if candidate is not None:
+                image = candidate
+                break
+        if image is None:
+            return empty, None
+
+        try:
+            image = image.convert("RGB")
+        except Exception:
+            return empty, None
+
+        # Due convenzioni si compensano: OpenGL conta le righe della texture
+        # dal basso, mentre glTF misura la coordinata v dall'alto. Invertire
+        # entrambe equivale a non invertire nulla, quindi si passano i pixel e
+        # le coordinate come sono.
+        pixels = np.asarray(image, np.uint8)
+
+        corners = uv[faces].reshape(-1, 2).astype("f4")
+        return corners, ((image.width, image.height), pixels.tobytes())
 
     @staticmethod
     def _colors(mesh, faces, base_color):
@@ -302,7 +404,7 @@ class TurntableRenderer:
 
     def close(self):
         """Libera la GPU. Dopo questa chiamata l'oggetto non e' piu' usabile."""
-        for attribute in ("vao", "vbo", "_msaa", "_resolved", "program"):
+        for attribute in ("vao", "vbo", "texture", "_msaa", "_resolved", "program"):
             resource = getattr(self, attribute, None)
             if resource is not None:
                 try:
