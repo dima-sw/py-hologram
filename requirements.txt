@@ -5,7 +5,12 @@ customtkinter>=5.2
 tkinterdnd2>=0.4
 
 # Rimozione sfondo (opzionale). Servono anche i modelli: vedi models/README.md
-onnxruntime>=1.16
+#
+# Su Windows conviene la variante DirectML: usa qualunque GPU senza CUDA e
+# rende circa dieci volte la CPU. Fornisce lo stesso modulo `onnxruntime`,
+# quindi le due si escludono a vicenda.
+onnxruntime-directml>=1.20 ; platform_system == "Windows"
+onnxruntime>=1.16 ; platform_system != "Windows"
 
 # Rendering di modelli 3D (opzionale)
 moderngl>=5.10

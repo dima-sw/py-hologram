@@ -9,6 +9,7 @@ import threading
 import time
 
 import customtkinter as ctk
+import tkinter as tk
 from tkinter import filedialog
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -18,6 +19,8 @@ from PIL import Image
 
 import engine
 import render3d
+from settings import (BACKGROUND_PRESETS, GLOW_PRESETS, QUALITY_PRESETS,
+                      STRIDE_PRESETS, THEMES, Settings, SettingsDialog)
 
 try:
     from tkinterdnd2 import DND_FILES, TkinterDnD
@@ -41,34 +44,17 @@ ACCENT_HOVER = "#6A48F5"
 SUCCESS = "#22C55E"
 DANGER = "#EF4444"
 
-QUALITY_PRESETS = {
-    "Bassa": 200,
-    "Media": 300,
-    "Alta": 480,
-    "Massima": 640,
-}
-
-BACKGROUND_PRESETS = {
-    "Originale": "none",
-    "Togli sfondo: movimento": "motion",
-    "Togli sfondo: persona": "person",
-    "Togli sfondo: oggetto": "object",
-    "Solo fondo scuro": "black",
-    "Green screen": "green",
-}
-
-# Un giro completo in otto secondi a 30 fotogrammi: abbastanza lento da
-# leggere la forma, abbastanza breve da non annoiare in vetrina.
-MODEL_SECONDS = 8.0
+# Cadenza del video generato dai modelli 3D. Durata e giri sono invece
+# regolabili dalle impostazioni.
 MODEL_FPS = 30.0
-MODEL_TURNS = 1.0
 
-# Oltre 0,5 il bagliore brucia i punti piu' chiari del soggetto.
-GLOW_PRESETS = {
-    "No": 0.0,
-    "Lieve": 0.3,
-    "Intenso": 0.5,
+NL = chr(10)
+
+PALETTE = {
+    "bg": BG, "card": CARD, "card_soft": CARD_SOFT, "border": BORDER,
+    "text": TEXT, "muted": MUTED, "accent": ACCENT, "accent_hover": ACCENT_HOVER,
 }
+
 
 
 def human_size(n):
@@ -87,6 +73,65 @@ def human_time(seconds):
     return f"{seconds}s"
 
 
+
+class MenuBar(ctk.CTkFrame):
+    """Barra dei menu disegnata a mano, con tendine native.
+
+    La barra di sistema di Tk non rispetta i colori su Windows e stonerebbe
+    col tema scuro; le tendine invece si possono colorare, e in cambio
+    conservano tastiera e comportamento a cui si e' abituati.
+    """
+
+    def __init__(self, master, menus, palette):
+        super().__init__(master, fg_color="transparent", height=34)
+        self.palette = palette
+        self._menus = {}
+
+        for column, (label, entries) in enumerate(menus):
+            button = ctk.CTkButton(
+                self, text=label, width=1, height=28, corner_radius=7,
+                font=ctk.CTkFont("Segoe UI", 12), fg_color="transparent",
+                hover_color=palette["card_soft"], text_color=palette["text"],
+            )
+            button.configure(command=lambda l=label, b=button: self._open(l, b))
+            button.grid(row=0, column=column, padx=(0, 2))
+            self._menus[label] = (self._menu(entries), button)
+
+    def _menu(self, entries):
+        menu = tk.Menu(
+            self, tearoff=0, bd=0, activeborderwidth=0,
+            bg=self._resolve(self.palette["card"]),
+            fg=self._resolve(self.palette["text"]),
+            activebackground=self.palette["accent"],
+            activeforeground="#FFFFFF",
+            font=("Segoe UI", 10),
+        )
+        for entry in entries:
+            if entry is None:
+                menu.add_separator()
+            else:
+                label, command = entry
+                menu.add_command(label=label, command=command)
+        return menu
+
+    @staticmethod
+    def _resolve(color):
+        """Da coppia (chiaro, scuro) al colore del tema attivo."""
+        if isinstance(color, (tuple, list)):
+            return color[1] if ctk.get_appearance_mode() == "Dark" else color[0]
+        return color
+
+    def refresh_theme(self):
+        for menu, _ in self._menus.values():
+            menu.configure(bg=self._resolve(self.palette["card"]),
+                           fg=self._resolve(self.palette["text"]))
+
+    def _open(self, label, button):
+        menu, _ = self._menus[label]
+        menu.tk_popup(button.winfo_rootx(),
+                      button.winfo_rooty() + button.winfo_height() + 2)
+
+
 class HologramApp(ctk.CTk, DND_BASE):
     def __init__(self):
         super().__init__()
@@ -102,6 +147,10 @@ class HologramApp(ctk.CTk, DND_BASE):
         self.preview_image = None
         self.preview_token = 0
 
+        self.settings = Settings.load()
+        self.settings_window = None
+        ctk.set_appearance_mode(THEMES[self.settings.get("theme")])
+
         self.title("Hologram Studio")
         self.geometry("880x700")
         self.minsize(820, 660)
@@ -109,6 +158,7 @@ class HologramApp(ctk.CTk, DND_BASE):
 
         self._build()
         self._enable_drag_and_drop()
+        self._bind_shortcuts()
         self._set_state("empty")
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -116,16 +166,45 @@ class HologramApp(ctk.CTk, DND_BASE):
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
+        self._build_menubar()
         self._build_header()
         self._build_stage()
         self._build_options()
         self._build_footer()
 
+    def _build_menubar(self):
+        menus = [
+            ("File", [
+                ("Apri video o modello…	Ctrl+O", self._pick_source),
+                ("Apri cartella dei risultati", self._open_output_folder),
+                None,
+                ("Esci	Ctrl+Q", self._on_close),
+            ]),
+            ("Modifica", [
+                ("Impostazioni…	Ctrl+,", self.open_settings),
+                None,
+                ("Ripristina predefiniti", self._reset_settings),
+            ]),
+            ("Visualizza", [(name, lambda n=name: self._set_theme(n))
+                            for name in THEMES]),
+            ("Aiuto", [
+                ("Guida rapida", self._show_help),
+                ("Informazioni", self._show_about),
+            ]),
+        ]
+        self.menubar = MenuBar(self, menus, PALETTE)
+        self.menubar.grid(row=0, column=0, sticky="w", padx=20, pady=(8, 0))
+
+    def _bind_shortcuts(self):
+        self.bind_all("<Control-o>", lambda _e: self._pick_source())
+        self.bind_all("<Control-comma>", lambda _e: self.open_settings())
+        self.bind_all("<Control-q>", lambda _e: self._on_close())
+
     def _build_header(self):
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=28, pady=(24, 12))
+        header.grid(row=1, column=0, sticky="ew", padx=28, pady=(14, 12))
         header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -138,15 +217,6 @@ class HologramApp(ctk.CTk, DND_BASE):
             font=ctk.CTkFont("Segoe UI", 13), text_color=MUTED,
         ).grid(row=1, column=0, sticky="w", pady=(2, 0))
 
-        self.theme_menu = ctk.CTkOptionMenu(
-            header, values=["Sistema", "Chiaro", "Scuro"], width=110, height=32,
-            corner_radius=10, font=ctk.CTkFont("Segoe UI", 12),
-            fg_color=CARD_SOFT, button_color=CARD_SOFT, button_hover_color=BORDER,
-            text_color=TEXT, dropdown_font=ctk.CTkFont("Segoe UI", 12),
-            command=self._change_theme,
-        )
-        self.theme_menu.set("Sistema")
-        self.theme_menu.grid(row=0, column=1, rowspan=2, sticky="e")
 
     def _build_stage(self):
         """Area centrale: zona di rilascio file oppure anteprima dal vivo."""
@@ -154,7 +224,7 @@ class HologramApp(ctk.CTk, DND_BASE):
             self, corner_radius=18, fg_color=CARD,
             border_width=1, border_color=BORDER,
         )
-        self.stage.grid(row=1, column=0, sticky="nsew", padx=28)
+        self.stage.grid(row=2, column=0, sticky="nsew", padx=28)
         self.stage.grid_columnconfigure(0, weight=1)
         self.stage.grid_rowconfigure(0, weight=1)
 
@@ -204,7 +274,7 @@ class HologramApp(ctk.CTk, DND_BASE):
 
     def _build_options(self):
         panel = ctk.CTkFrame(self, fg_color="transparent")
-        panel.grid(row=2, column=0, sticky="ew", padx=28, pady=(16, 0))
+        panel.grid(row=3, column=0, sticky="ew", padx=28, pady=(16, 0))
         panel.grid_columnconfigure(0, weight=1)
 
         # riga file selezionato
@@ -253,16 +323,18 @@ class HologramApp(ctk.CTk, DND_BASE):
             font=ctk.CTkFont("Segoe UI", 12), selected_color=ACCENT,
             selected_hover_color=ACCENT_HOVER, unselected_color=CARD,
             unselected_hover_color=CARD_SOFT, text_color=TEXT,
-            command=lambda _v: self._refresh_estimate(),
+            command=lambda value: self._set_setting("quality", value, preview=False),
         )
-        self.quality.set("Media")
+        self.quality.set(self.settings.get("quality"))
         self.quality.grid(row=0, column=1, sticky="w")
 
         self.loop = ctk.CTkSwitch(
             self.settings_row, text="Loop perfetto", font=ctk.CTkFont("Segoe UI", 13),
             text_color=TEXT, progress_color=ACCENT, button_color="#FFFFFF",
-            command=self._look_changed,
+            command=lambda: self._set_setting("loop", bool(self.loop.get())),
         )
+        if self.settings.get("loop"):
+            self.loop.select()
         self.loop.grid(row=0, column=2, padx=(18, 2))
 
         # riga aspetto
@@ -280,9 +352,9 @@ class HologramApp(ctk.CTk, DND_BASE):
             corner_radius=10, font=ctk.CTkFont("Segoe UI", 12),
             fg_color=CARD, button_color=CARD, button_hover_color=CARD_SOFT,
             text_color=TEXT, dropdown_font=ctk.CTkFont("Segoe UI", 12),
-            command=lambda _v: self._look_changed(),
+            command=lambda value: self._set_setting("background", value),
         )
-        self.background.set("Originale")
+        self.background.set(self.settings.get("background"))
         self.background.grid(row=0, column=1, sticky="w")
 
         ctk.CTkLabel(
@@ -295,16 +367,18 @@ class HologramApp(ctk.CTk, DND_BASE):
             font=ctk.CTkFont("Segoe UI", 12), selected_color=ACCENT,
             selected_hover_color=ACCENT_HOVER, unselected_color=CARD,
             unselected_hover_color=CARD_SOFT, text_color=TEXT,
-            command=lambda _v: self._look_changed(),
+            command=lambda value: self._set_setting("glow", value),
         )
-        self.glow.set("No")
+        self.glow.set(self.settings.get("glow"))
         self.glow.grid(row=0, column=3, sticky="w")
 
         self.autofit = ctk.CTkSwitch(
             self.look_row, text="Riempi la faccia", font=ctk.CTkFont("Segoe UI", 13),
             text_color=TEXT, progress_color=ACCENT, button_color="#FFFFFF",
-            command=self._look_changed,
+            command=lambda: self._set_setting("autofit", bool(self.autofit.get())),
         )
+        if self.settings.get("autofit"):
+            self.autofit.select()
         self.autofit.grid(row=0, column=4, padx=(18, 2), sticky="e")
 
         # avanzamento
@@ -322,7 +396,7 @@ class HologramApp(ctk.CTk, DND_BASE):
 
     def _build_footer(self):
         footer = ctk.CTkFrame(self, fg_color="transparent")
-        footer.grid(row=3, column=0, sticky="ew", padx=28, pady=(14, 24))
+        footer.grid(row=4, column=0, sticky="ew", padx=28, pady=(14, 24))
         footer.grid_columnconfigure(0, weight=1)
 
         self.btn_primary = ctk.CTkButton(
@@ -397,10 +471,94 @@ class HologramApp(ctk.CTk, DND_BASE):
 
     def _current_look(self):
         return engine.Look(
-            background=BACKGROUND_PRESETS.get(self.background.get(), "none"),
-            glow=GLOW_PRESETS.get(self.glow.get(), 0.0),
-            autofit=bool(self.autofit.get()),
+            background=BACKGROUND_PRESETS.get(self.settings.get("background"), "none"),
+            glow=GLOW_PRESETS.get(self.settings.get("glow"), 0.0),
+            autofit=bool(self.settings.get("autofit")),
+            segment_stride=STRIDE_PRESETS.get(self.settings.get("stride"), 1),
         )
+
+    def _set_setting(self, key, value, preview=True):
+        """Unico punto in cui un'impostazione cambia."""
+        self.settings.update({key: value})
+        self.settings.save()
+        if preview:
+            self._look_changed()
+        else:
+            self._refresh_estimate()
+
+    def _apply_settings_to_widgets(self):
+        """Riporta nei controlli in linea i valori cambiati altrove."""
+        self.quality.set(self.settings.get("quality"))
+        self.background.set(self.settings.get("background"))
+        self.glow.set(self.settings.get("glow"))
+        for widget, key in ((self.autofit, "autofit"), (self.loop, "loop")):
+            widget.select() if self.settings.get(key) else widget.deselect()
+        ctk.set_appearance_mode(THEMES[self.settings.get("theme")])
+        self.menubar.refresh_theme()
+
+    def open_settings(self):
+        if self.settings_window is not None and self.settings_window.winfo_exists():
+            self.settings_window.focus_force()
+            return
+        self.settings_window = SettingsDialog(
+            self, self.settings, PALETTE, self._settings_changed,
+            provider_label=engine.provider_label(engine.segmentation_provider()),
+            output_default=self._output_dir(),
+        )
+
+    def _settings_changed(self, _key=None):
+        self._apply_settings_to_widgets()
+        if self.sources and self.ui_state != "running":
+            self._look_changed()
+
+    def _reset_settings(self):
+        self.settings.reset()
+        self.settings.save()
+        self._settings_changed()
+
+    def _set_theme(self, name):
+        self._set_setting("theme", name, preview=False)
+        ctk.set_appearance_mode(THEMES[name])
+        self.menubar.refresh_theme()
+
+    def _show_help(self):
+        self._message("Guida rapida", NL.join([
+            "1. Trascina uno o piu' video, oppure un modello 3D (.glb, .obj).",
+            "2. Scegli come trattare lo sfondo e la resa in Impostazioni.",
+            "3. Premi Crea ologramma.",
+            "",
+            "Togli sfondo: movimento richiede la camera ferma ed e' immediato.",
+            "Togli sfondo: persona funziona anche con la camera in mano.",
+            "",
+            "Riproduci il risultato a schermo intero con la piramide sopra.",
+        ]))
+
+    def _show_about(self):
+        models = ", ".join(engine.available_models()) or "nessuno"
+        self._message("Hologram Studio", NL.join([
+            "Converte video e modelli 3D in ologrammi per display a piramide.",
+            "",
+            f"Accelerazione: {engine.provider_label(engine.segmentation_provider())}",
+            f"ffmpeg: {'presente' if engine.has_ffmpeg() else 'assente'}",
+            f"Modelli di ritaglio: {models}",
+        ]))
+
+    def _message(self, title, body):
+        window = ctk.CTkToplevel(self)
+        window.title(title)
+        window.geometry("460x300")
+        window.configure(fg_color=BG)
+        window.transient(self)
+        ctk.CTkLabel(
+            window, text=body, justify="left", wraplength=410,
+            font=ctk.CTkFont("Segoe UI", 13), text_color=TEXT,
+        ).pack(padx=24, pady=(24, 12), anchor="w")
+        ctk.CTkButton(
+            window, text="Chiudi", width=110, height=36, corner_radius=10,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            command=window.destroy,
+        ).pack(pady=(0, 20))
+        window.after(120, window.lift)
 
     def _look_changed(self):
         """Un'opzione di resa e' cambiata: rigenera anteprima e stima."""
@@ -479,14 +637,13 @@ class HologramApp(ctk.CTk, DND_BASE):
         self._set_state("ready")
         self._request_preview()
 
-    @staticmethod
-    def _inspect(path):
+    def _inspect(self, path):
         """Metadati della sorgente, che sia un video o un modello 3D."""
         if render3d.is_model(path):
             info = engine.model_info(path)
             info["kind"] = "model"
-            info["frames"] = int(MODEL_SECONDS * MODEL_FPS)
-            info["duration"] = MODEL_SECONDS
+            info["frames"] = int(self.settings.get("model_seconds") * MODEL_FPS)
+            info["duration"] = float(self.settings.get("model_seconds"))
             return info
         info = engine.probe(path)
         info["kind"] = "video"
@@ -503,7 +660,7 @@ class HologramApp(ctk.CTk, DND_BASE):
             if info["kind"] == "model":
                 self.file_meta.configure(
                     text=f"modello 3D  ·  {info['triangles']} triangoli  ·  "
-                         f"giro di {human_time(MODEL_SECONDS)}  ·  "
+                         f"giro di {human_time(self.settings.get('model_seconds'))}  ·  "
                          f"{human_size(info['size_bytes'])}")
             else:
                 self.file_meta.configure(
@@ -604,6 +761,10 @@ class HologramApp(ctk.CTk, DND_BASE):
             return
         self._show_stage("drop")
 
+    def _output_dir(self):
+        chosen = self.settings.get("output_dir")
+        return chosen if chosen and os.path.isdir(chosen) else OUTPUT_DIR
+
     def _suggest_outputs(self, sources):
         taken = set()
         outputs = []
@@ -615,10 +776,11 @@ class HologramApp(ctk.CTk, DND_BASE):
 
     def _suggest_output(self, source, taken=()):
         base = os.path.splitext(os.path.basename(source))[0]
-        candidate = os.path.join(OUTPUT_DIR, f"{base}_hologram.mp4")
+        folder = self._output_dir()
+        candidate = os.path.join(folder, f"{base}_hologram.mp4")
         i = 2
         while os.path.exists(candidate) or candidate.lower() in taken:
-            candidate = os.path.join(OUTPUT_DIR, f"{base}_hologram_{i}.mp4")
+            candidate = os.path.join(folder, f"{base}_hologram_{i}.mp4")
             i += 1
         return candidate
 
@@ -631,7 +793,7 @@ class HologramApp(ctk.CTk, DND_BASE):
             side = 3 * width
             self.status.configure(
                 text=f"Uscita: {side}×{side} px  ·  giro di "
-                     f"{human_time(MODEL_SECONDS)}  ·  "
+                     f"{human_time(self.settings.get('model_seconds'))}  ·  "
                      f"{os.path.basename(self.output_path)}",
                 text_color=MUTED,
             )
@@ -700,7 +862,10 @@ class HologramApp(ctk.CTk, DND_BASE):
                         # ciclico per costruzione: restano utili solo le luci.
                         results.append(engine.convert_model(
                             src, dst, base_width=width,
-                            seconds=MODEL_SECONDS, fps=MODEL_FPS, turns=MODEL_TURNS,
+                            seconds=float(self.settings.get("model_seconds")),
+                            fps=MODEL_FPS,
+                            turns=float(self.settings.get("model_turns")),
+                            elevation=float(self.settings.get("model_elevation")),
                             look=engine.Look(glow=look.glow),
                             on_progress=on_progress, on_preview=on_preview,
                             should_cancel=self.cancel_flag.is_set,
@@ -744,8 +909,8 @@ class HologramApp(ctk.CTk, DND_BASE):
         self._set_state("ready")
 
     def _open_output_folder(self):
-        target = self.output_path if self.output_path else OUTPUT_DIR
-        folder = os.path.dirname(target)
+        target = self.output_path if self.output_path else self._output_dir()
+        folder = os.path.dirname(target) or self._output_dir()
         if os.path.isdir(folder):
             os.startfile(folder)
 

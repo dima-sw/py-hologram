@@ -5,7 +5,8 @@ A Python application for creating hologram videos from regular video files. This
 ## Features
 
 - **Video to Hologram Conversion**: Transform any video file into a hologram format
-- **Modern GUI**: Drag & drop, live preview, light and dark themes
+- **Modern GUI**: Menu bar, settings window with saved preferences, drag & drop,
+  live preview, light and dark themes
 - **Background Removal**: motion differencing (fast, no model) or AI cut-out (U^2-Net), plus luma and chroma keying
 - **3D Models**: load a .glb/.obj and get real parallax — each face shows a different side
 - **Hologram Look**: bloom glow and auto-fill of the pyramid face
@@ -92,18 +93,24 @@ python main/app.py
 
 Then:
 
-1. Drag one or more videos onto the window, or click to pick them. A preview
-   of the resulting hologram appears straight away.
-2. Pick a quality preset and the look options you want.
-3. Click **Crea ologramma**. Progress, remaining time and a live preview are
+1. Drag one or more videos onto the window, or a 3D model, or use **File >
+   Apri** (Ctrl+O).
+2. Adjust the look inline, or open **Modifica > Impostazioni** (Ctrl+,) for
+   everything: output folder, background handling, segmentation stride, 3D
+   turntable duration, theme.
+3. Press **Crea ologramma**. Progress, remaining time and a live preview are
    shown while the video is written; the conversion can be cancelled at any
    time.
-4. The result lands in `holograms/` as an MP4, named after the source video.
-   Existing files are never overwritten.
+4. The result lands in `holograms/` (or the folder you chose) as an MP4, named
+   after the source. Existing files are never overwritten.
 
 With several videos queued the progress line reads `File 2 di 5`, each file
 counts equally toward the overall bar, and cancelling stops the whole queue
 without leaving partial files behind.
+
+Preferences are saved to `~/.hologram_studio.json` and restored on the next
+launch. A corrupt or out-of-range value falls back to its default rather than
+preventing start-up.
 
 ### Programmatic usage
 
@@ -232,13 +239,33 @@ network resizes to 320x320 internally, so a larger source buys nothing). Four
 inference threads measured fastest; six are slower, because the threads
 contend.
 
-| Model | Size | Throughput |
-|-------|------|-----------|
-| `u2net_human_seg` | 176 MB | 1.8 fps |
-| `u2netp` | 4.6 MB | 4.9 fps |
+It runs on the GPU where onnxruntime exposes one. On Windows install
+`onnxruntime-directml`, which uses any GPU without needing CUDA. The engine
+picks DirectML, then CUDA, then CPU, and falls back if an accelerator is listed
+but fails to start.
 
-By far the slowest stage in the project — a 4.5s clip takes ~75s. Use it when
-the camera moves, which is where differencing cannot help.
+| Model | Size | CPU | GPU (DirectML) |
+|-------|------|-----|----------------|
+| `u2net_human_seg` | 176 MB | 2.1 fps | **29.3 fps** |
+| `u2netp` | 4.6 MB | 4.9 fps | **47.0 fps** |
+
+A 4.5s clip went from 75s to 7.2s. Session start-up costs ~2s on the GPU
+against ~0.5s on CPU, paid once.
+
+### Frame stride
+
+Only one frame in N is actually segmented; the others reuse the previous mask.
+The subject barely moves between consecutive frames, so the cost in accuracy is
+small and the gain in time is linear. Measured against a known mask:
+
+| Stride | IoU | Throughput |
+|--------|-----|-----------|
+| Every frame | 0.906 | 51.8 fps |
+| 1 in 2 | 0.874 | 103.8 fps |
+| 1 in 3 | 0.853 | 150.7 fps |
+| 1 in 4 | 0.820 | 195.8 fps |
+
+Set it in Impostazioni. `Ogni fotogramma` is the default.
 
 Both methods feather the mask and blend it with the previous frame (70/30): a
 mask computed independently per frame flickers along the edges.

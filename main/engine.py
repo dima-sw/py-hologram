@@ -151,23 +151,50 @@ def available_models():
     return [k for k in SEGMENTATION_MODELS if has_model(k)]
 
 
+# Acceleratori provati in ordine. DirectML sfrutta qualunque GPU su Windows
+# senza bisogno di CUDA: sui modelli U^2-Net rende circa dieci volte la CPU.
+_PROVIDER_ORDER = ("DmlExecutionProvider", "CUDAExecutionProvider", "CPUExecutionProvider")
+
+
+def segmentation_provider():
+    """Acceleratore che verrebbe usato, o None se manca onnxruntime."""
+    try:
+        import onnxruntime as ort
+    except ImportError:
+        return None
+    available = ort.get_available_providers()
+    for name in _PROVIDER_ORDER:
+        if name in available:
+            return name
+    return available[0] if available else None
+
+
+def provider_label(name):
+    return {
+        "DmlExecutionProvider": "GPU (DirectML)",
+        "CUDAExecutionProvider": "GPU (CUDA)",
+        "CPUExecutionProvider": "CPU",
+    }.get(name or "", "non disponibile")
+
+
 class _Segmenter:
     """Ritaglia il soggetto con U^2-Net, fotogramma per fotogramma.
 
-    Gira su CPU tramite onnxruntime: e' l'unica parte lenta della pipeline,
-    circa 2 fotogrammi al secondo con il modello per le persone e 5 con quello
-    generico. Il resto del programma ne resta indipendente.
+    Usa la GPU quando onnxruntime la espone, altrimenti la CPU. E' comunque
+    la parte piu' lenta della pipeline, ma su GPU passa da un paio di
+    fotogrammi al secondo a qualche decina.
     """
 
     # Quattro thread rendono piu' di sei: oltre quel punto i thread litigano
-    # fra loro e il tempo per fotogramma peggiora (misurato).
+    # fra loro e il tempo per fotogramma peggiora (misurato). Vale solo per la
+    # CPU: sull'acceleratore il parametro e' ignorato.
     _THREADS = 4
 
     # Peso del fotogramma corrente nella media con quello precedente. La
     # maschera calcolata su ogni fotogramma da sola "sfarfalla" sui bordi.
     _SMOOTHING = 0.7
 
-    def __init__(self, kind, feather=1.2):
+    def __init__(self, kind, feather=1.2, stride=1):
         path = model_path(kind)
         if not os.path.exists(path):
             raise ConversionError(
@@ -189,10 +216,27 @@ class _Segmenter:
         options.intra_op_num_threads = self._THREADS
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-        self._session = ort.InferenceSession(
-            path, options, providers=["CPUExecutionProvider"])
+        available = ort.get_available_providers()
+        wanted = [p for p in _PROVIDER_ORDER if p in available] or available
+        try:
+            self._session = ort.InferenceSession(path, options, providers=wanted)
+        except Exception:
+            # Un acceleratore puo' essere elencato e poi non inizializzarsi:
+            # meglio ripiegare sulla CPU che fallire la conversione.
+            self._session = ort.InferenceSession(
+                path, options, providers=["CPUExecutionProvider"])
+
+        self.provider = (self._session.get_providers() or ["CPUExecutionProvider"])[0]
         self._input = self._session.get_inputs()[0].name
         self._feather = feather
+
+        # Un fotogramma ogni `stride` viene segmentato davvero; gli altri
+        # riusano la maschera precedente. Il soggetto si sposta di poco fra
+        # un fotogramma e il successivo, quindi il costo in qualita' e'
+        # contenuto e il guadagno in tempo e' lineare.
+        self._stride = max(1, int(stride))
+        self._counter = 0
+        self._cached = None
         self._previous = None
 
     def _prepare(self, frame):
@@ -205,6 +249,15 @@ class _Segmenter:
 
     def alpha(self, frame):
         """Maschera 0..1 delle dimensioni del frame."""
+        reuse = self._cached is not None and self._counter % self._stride != 0
+        self._counter += 1
+        if reuse:
+            return self._cached
+
+        self._cached = self._infer(frame)
+        return self._cached
+
+    def _infer(self, frame):
         prediction = self._session.run(None, {self._input: self._prepare(frame)})[0]
         mask = prediction[0, 0]
 
@@ -224,6 +277,8 @@ class _Segmenter:
 
     def reset(self):
         self._previous = None
+        self._cached = None
+        self._counter = 0
 
 
 # ------------------------------------------- rimozione sfondo per differenza
@@ -446,12 +501,13 @@ class Look:
     """
 
     def __init__(self, background="none", glow=0.0, autofit=False,
-                 black_level=48, green_spill=True):
+                 black_level=48, green_spill=True, segment_stride=1):
         self.background = background if background in BACKGROUND_MODES else "none"
         self.glow = max(0.0, min(1.0, float(glow)))
         self.autofit = bool(autofit)
         self.black_level = int(black_level)
         self.green_spill = bool(green_spill)
+        self.segment_stride = max(1, int(segment_stride))
 
     @property
     def touches_pixels(self):
@@ -488,7 +544,7 @@ class _LookProcessor:
     def __init__(self, look, source=None, size=None):
         self.look = look
         self._fade = self._build_fade(look.black_level)
-        self._segmenter = (_Segmenter(look.background)
+        self._segmenter = (_Segmenter(look.background, stride=look.segment_stride)
                            if look.uses_segmentation else None)
 
         self._motion = None
